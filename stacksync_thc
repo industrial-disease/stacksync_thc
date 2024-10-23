@@ -1,0 +1,63 @@
+from flask import Flask, request, jsonify
+import subprocess
+import sys
+import ast
+
+
+app = Flask(__name__)
+
+@app.route('/execute', methods=['POST'])
+def execute_script():
+    data = request.get_json()
+
+    if 'script' not in data:
+        return jsonify({"error": "Script not provided"}), 400
+
+    script = data['script']
+
+    try:
+        # check if it's valid Python and has a main() function
+        parsed_script = ast.parse(script)
+        main_func = None
+
+        for node in parsed_script.body:
+            if isinstance(node, ast.FunctionDef) and node.name == 'main':
+                main_func = node
+                break
+
+            if not main_func:
+                return jsonify({"error": "No main() function found in script"}), 400
+
+        # temporary file
+        with open('/app/temp_script.py', 'w') as temp_file:
+            temp_file.write(script)
+
+        # executing using nsjail
+        try:
+            result = subprocess.run(
+                [
+                    '/opt/nsjail/nsjail',
+                    '--config', '/opt/nsjail/configs/stacksync.cfg',
+                    '--', '/usr/bin/python3', '/app/temp_script.py'
+                ],
+                capture_output=True,
+                text=True,
+                timeout=5
+            )
+
+            stdout_output = result.stdout
+            stderr_output = result.stderr
+
+            if result.returncode != 0:
+                return jsonify({"result": None, "stderr": stderr_output}), 400
+
+            return jsonify({"result": stdout_output.strip(), "stderr": stderr_output.strip()})
+        
+        except Exception as e:
+            return jsonify({"error": "Invalid Python script"}), 400
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 400
+
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=8080)
